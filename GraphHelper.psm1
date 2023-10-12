@@ -116,7 +116,7 @@ function Get-GraphToken($tenantid, $scope, $AsApp, $AppID, $refreshToken, $Retur
     }
 }
 
-function Write-LogMessage ($message, $tenant = 'None', $API = 'None', $user, $sev) {
+function Write-LogMessage ($message, $tenant = 'None', $API = 'None', $tenantId = $null, $user, $sev) {
     try {
         $username = ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($user)) | ConvertFrom-Json).userDetails
     }
@@ -143,6 +143,12 @@ function Write-LogMessage ($message, $tenant = 'None', $API = 'None', $user, $se
         'PartitionKey' = $PartitionKey
         'RowKey'       = ([guid]::NewGuid()).ToString()
     }
+
+    if($tenantId)
+    {
+        $TableRow.Add('TenantID', [string]$tenantId)
+    }
+    
     $Table.Entity = $TableRow
     Add-AzDataTableEntity @Table | Out-Null
 }
@@ -552,7 +558,7 @@ function Remove-CIPPCache {
 function New-ExoRequest ($tenantid, $cmdlet, $cmdParams, $useSystemMailbox, $Anchor, $NoAuthCheck) {
     if ((Get-AuthorisedRequest -TenantID $tenantid) -or $NoAuthCheck -eq $True) {
         $token = Get-ClassicAPIToken -resource 'https://outlook.office365.com' -Tenantid $tenantid
-        $tenant = (get-tenants | Where-Object -Property defaultDomainName -EQ $tenantid).customerId
+        $tenant = (get-tenants -IncludeErrors | Where-Object -Property defaultDomainName -EQ $tenantid).customerId
         if ($cmdParams) {
             $Params = $cmdParams
         }
