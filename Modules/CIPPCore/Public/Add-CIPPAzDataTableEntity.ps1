@@ -134,10 +134,11 @@ function Add-CIPPAzDataTableEntity {
                     }
 
                 } catch {
-                    throw "Error processing entity: $($_.Exception.Message) Linenumner: $($_.InvocationInfo.ScriptLineNumber)"
+                    $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+                    throw "Error processing entity: $ErrorMessage Linenumber: $($_.InvocationInfo.ScriptLineNumber)"
                 }
             } else {
-                Write-Information "THE ERROR IS $($_.Exception.ErrorCode). The size of the entity is $entitySize."
+                Write-Information "THE ERROR IS $($_.Exception.message). The size of the entity is $entitySize."
                 throw $_
             }
         }
