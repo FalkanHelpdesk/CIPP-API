@@ -31,10 +31,10 @@ Function Invoke-ExecCPVPermissions {
         if ($TenantFilter -ne 'PartnerTenant') {
             Set-CIPPCPVConsent @CPVConsentParams
         } else {
-            $TenantFilter = $env:TenantId
+            $TenantFilter = $env:TenantID
         }
-        Add-CIPPApplicationPermission -RequiredResourceAccess 'CippDefaults' -ApplicationId $ENV:ApplicationID -tenantfilter $TenantFilter
-        Add-CIPPDelegatedPermission -RequiredResourceAccess 'CippDefaults' -ApplicationId $ENV:ApplicationID -tenantfilter $TenantFilter
+        Add-CIPPApplicationPermission -RequiredResourceAccess 'CIPPDefaults' -ApplicationId $ENV:ApplicationID -tenantfilter $TenantFilter
+        Add-CIPPDelegatedPermission -RequiredResourceAccess 'CIPPDefaults' -ApplicationId $ENV:ApplicationID -tenantfilter $TenantFilter
         Set-CIPPSAMAdminRoles -TenantFilter $TenantFilter
         $Success = $true
     } catch {
