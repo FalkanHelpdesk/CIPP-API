@@ -2,6 +2,10 @@ function Get-CIPPAlertBlockedValidPassword {
     <#
     .FUNCTIONALITY
         Entrypoint
+    .SYNOPSIS
+        Detects sign-ins where Microsoft Entra confirmed the correct password,
+        but access was subsequently prevented by Conditional Access or a
+        disabled application.
     #>
     [CmdletBinding()]
     param(
@@ -15,7 +19,10 @@ function Get-CIPPAlertBlockedValidPassword {
     try {
         $LookbackMinutes = 35
         $CandidateErrorCodes = @(53003, 7000112)
-        $AlertPartitionKey = 'BlockedValidPassword'
+
+        # CIPP natively stores AlertLastRun results in UTC date partitions.
+        $CurrentPartition = (Get-Date).ToUniversalTime().ToString('yyyyMMdd')
+        $PreviousPartition = (Get-Date).ToUniversalTime().AddDays(-1).ToString('yyyyMMdd')
 
         $StartTime = (Get-Date).ToUniversalTime().AddMinutes(-$LookbackMinutes).ToString('yyyy-MM-ddTHH:mm:ssZ')
 
@@ -23,33 +30,66 @@ function Get-CIPPAlertBlockedValidPassword {
 
         $SignIns = New-GraphGetRequest -uri $Uri -tenantid $TenantFilter
 
+        # Read event IDs emitted during the current and previous UTC dates.
+        # Including the previous partition prevents duplicates around midnight UTC.
         $PreviousSignInIds = @()
 
         try {
             $AlertTable = Get-CIPPTable -TableName 'AlertLastRun'
             $CmdletName = $MyInvocation.MyCommand.ToString()
             $RowKey = "$TenantFilter-$CmdletName"
+            $SafeRowKey = ConvertTo-CIPPODataFilterValue -Value $RowKey -Type String
 
-            $PreviousRow = Get-CIPPAzDataTableEntity @AlertTable -Filter "RowKey eq '$RowKey' and PartitionKey eq '$AlertPartitionKey'"
+            $PreviousRows = Get-CIPPAzDataTableEntity @AlertTable -Filter "RowKey eq '$SafeRowKey'"
 
-            if ($PreviousRow.LogData) {
-                $PreviousData = $PreviousRow.LogData | ConvertFrom-Json
+            $RelevantRows = @(
+                $PreviousRows | Where-Object {
+                    [string]$_.PartitionKey -in @(
+                        $CurrentPartition,
+                        $PreviousPartition
+                    )
+                }
+            )
 
-                $PreviousSignInIds = @(
-                    $PreviousData |
-                        ForEach-Object { $_.SignInId } |
-                        Where-Object { $_ } |
-                        Select-Object -Unique
-                )
+            foreach ($PreviousRow in $RelevantRows) {
+                if (:IsNullOrWhiteSpace([string]$PreviousRow.LogData)) {
+                    continue
+                }
+
+                try {
+                    $PreviousData = $PreviousRow.LogData |
+                        ConvertFrom-Json -ErrorAction Stop
+
+                    $PreviousSignInIds += @(
+                        $PreviousData |
+                            ForEach-Object {
+                                $_.SignInId
+                            } |
+                            Where-Object {
+                                -not :IsNullOrWhiteSpace([string]$_)
+                            }
+                    )
+                } catch {
+                    Write-Information "Could not parse previous blocked-password alert data for partition $($PreviousRow.PartitionKey): $($_.Exception.Message)"
+                }
             }
+
+            $PreviousSignInIds = @(
+                $PreviousSignInIds |
+                    Sort-Object -Unique
+            )
         } catch {
-            Write-Information "No previous blocked-password alert data found for $TenantFilter."
+            Write-Information "No previous blocked-password alert data was found for $TenantFilter."
         }
 
-        $AlertData = foreach ($SignIn in $SignIns) {
+        $AlertData = foreach ($SignIn in @($SignIns)) {
             $ErrorCode = [int64]$SignIn.status.errorCode
 
             if ($ErrorCode -notin $CandidateErrorCodes) {
+                continue
+            }
+
+            if (:IsNullOrWhiteSpace([string]$SignIn.id)) {
                 continue
             }
 
@@ -58,11 +98,12 @@ function Get-CIPPAlertBlockedValidPassword {
             }
 
             $SuccessfulPasswordSteps = @(
-                $SignIn.authenticationDetails | Where-Object {
-                    $_.authenticationMethod -eq 'Password' -and
-                    $_.succeeded -eq $true -and
-                    $_.authenticationStepResultDetail -eq 'Correct password'
-                }
+                $SignIn.authenticationDetails |
+                    Where-Object {
+                        $_.authenticationMethod -eq 'Password' -and
+                        $_.succeeded -eq $true -and
+                        $_.authenticationStepResultDetail -eq 'Correct password'
+                    }
             )
 
             if ($SuccessfulPasswordSteps.Count -eq 0) {
@@ -132,11 +173,13 @@ function Get-CIPPAlertBlockedValidPassword {
         }
 
         if ($AlertData) {
+            # Do not override PartitionKey.
+            # Write-AlertTrace uses CIPP's native yyyyMMdd partition convention,
+            # allowing Invoke-ListAlertResults to expose the result normally.
             Write-AlertTrace `
                 -cmdletName $MyInvocation.MyCommand `
                 -tenantFilter $TenantFilter `
-                -data $AlertData `
-                -PartitionKey $AlertPartitionKey
+                -data $AlertData
         }
     } catch {
         $ErrorMessage = Get-CippException -Exception $_
